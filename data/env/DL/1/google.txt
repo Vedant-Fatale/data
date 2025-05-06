@@ -1,0 +1,129 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+import yfinance as yf
+from datetime import timedelta
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, LSTM, Dropout
+from tensorflow.keras.optimizers import Adam
+%matplotlib inline
+plt.style.use('seaborn-v0_8-whitegrid')
+
+google = yf.Ticker('GOOGL')
+df = google.history(period='5y')
+print('Dataset Shape:', df.shape)
+df.head()
+
+plt.figure(figsize=(15,7))
+plt.title('Google Stock Price History')
+plt.plot(df['Close'])
+plt.xlabel('Date')
+plt.ylabel('Close Price USD ($)')
+plt.show()
+
+data = df['Close'].values.reshape(-1, 1)
+
+# Scale the data
+scaler = MinMaxScaler()
+scaled_data = scaler.fit_transform(data)
+
+def create_sequences(data, seq_length):
+    X, y = [], []
+    for i in range(len(data) - seq_length):
+        X.append(data[i:(i + seq_length)])
+        y.append(data[i + seq_length])
+    return np.array(X), np.array(y)
+
+seq_length = 60
+X, y = create_sequences(scaled_data, seq_length)
+
+train_size = int(len(X) * 0.8)
+X_train, X_test = X[:train_size], X[train_size:]
+y_train, y_test = y[:train_size], y[train_size:]
+
+model = Sequential([
+    LSTM(50, return_sequences=True, input_shape=(seq_length, 1)),
+    Dropout(0.2),
+    LSTM(50, return_sequences=True),
+    Dropout(0.2),
+    LSTM(50),
+    Dropout(0.2),
+    Dense(1)
+])
+model.compile(optimizer=Adam(learning_rate=0.001), loss='mse')
+model.summary()
+
+history = model.fit(
+    X_train, y_train,
+    epochs=50,
+    batch_size=32,
+    validation_split=0.1,
+    verbose=1
+)
+
+plt.figure(figsize=(15,7))
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Model Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.show()
+
+train_predict = model.predict(X_train)
+test_predict = model.predict(X_test)
+
+train_predict = scaler.inverse_transform(train_predict)
+y_train_inv = scaler.inverse_transform(y_train)
+test_predict = scaler.inverse_transform(test_predict)
+y_test_inv = scaler.inverse_transform(y_test)
+
+train_rmse = np.sqrt(np.mean((train_predict - y_train_inv) ** 2))
+test_rmse = np.sqrt(np.mean((test_predict - y_test_inv) ** 2))
+print(f'Train RMSE: {train_rmse:.2f}')
+print(f'Test RMSE: {test_rmse:.2f}')
+
+def predict_future(model, last_sequence, n_steps):
+    """Predict future values using the trained model."""
+    future_predictions = []
+    current_sequence = last_sequence.copy()
+    
+    for _ in range(n_steps):
+        # Get prediction for next day
+        next_pred = model.predict(current_sequence.reshape(1, seq_length, 1))[0]
+        future_predictions.append(next_pred)
+        
+        # Update sequence for next prediction
+        current_sequence = np.roll(current_sequence, -1)
+        current_sequence[-1] = next_pred
+    
+    return np.array(future_predictions)
+
+# Get last sequence from data
+last_sequence = scaled_data[-seq_length:]
+
+# Predict next 30 days
+future_pred_scaled = predict_future(model, last_sequence, 30)
+future_pred = scaler.inverse_transform(future_pred_scaled)
+
+# Create future dates
+last_date = df.index[-1]
+future_dates = [last_date + timedelta(days=x) for x in range(1, 31)]
+
+# Plot predictions including historical data
+plt.figure(figsize=(15, 6))
+plt.plot(df.index[-100:], df['Close'].values[-100:], label='Historical Price')
+plt.plot(future_dates, future_pred, label='Future Predictions', color='red')
+plt.title('Google Stock Price Prediction - Next 30 Days')
+plt.xlabel('Date')
+plt.ylabel('Price (USD)')
+plt.legend()
+plt.show()
+
+# Print predicted prices
+print("\nPredicted prices for the next 5 days:")
+for date, price in zip(future_dates[:5], future_pred[:5]):
+    print(f"{date.strftime('%Y-%m-%d')}: ${price[0]:.2f}")
+

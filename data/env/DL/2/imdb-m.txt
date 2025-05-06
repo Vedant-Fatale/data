@@ -1,0 +1,147 @@
+import tensorflow as tf
+import numpy as np
+import matplotlib.pyplot as plt
+from tensorflow.keras.datasets import imdb
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+import warnings
+warnings.filterwarnings('ignore')
+np.random.seed(42)
+tf.random.set_seed(42)
+
+def load_imdb_data(num_words=10000, maxlen=200):
+    print("Loading IMDB dataset...")
+    (X_train, y_train), (X_test, y_test) = imdb.load_data(num_words=num_words)
+    X_train = pad_sequences(X_train, maxlen=maxlen)
+    X_test = pad_sequences(X_test, maxlen=maxlen)
+    return (X_train, y_train), (X_test, y_test)
+
+(X_train, y_train), (X_test, y_test) = load_imdb_data()
+
+val_samples = 10000
+X_val = X_train[:val_samples]
+y_val = y_train[:val_samples]
+X_train = X_train[val_samples:]
+y_train = y_train[val_samples:]
+
+print(f"Training set shape: {X_train.shape}")
+print(f"Validation set shape: {X_val.shape}")
+print(f"Test set shape: {X_test.shape}")
+
+
+
+def create_model(num_words=10000, maxlen=200):
+
+    model = tf.keras.Sequential([
+        tf.keras.layers.Embedding(num_words, 128, input_length=maxlen),
+        
+        tf.keras.layers.Conv1D(64, 5, activation='relu'),
+        tf.keras.layers.MaxPooling1D(2),
+        
+        tf.keras.layers.LSTM(64, return_sequences=True),
+        tf.keras.layers.LSTM(32),
+        
+        tf.keras.layers.Dense(64, activation='relu'),
+        tf.keras.layers.Dropout(0.5),
+        tf.keras.layers.Dense(32, activation='relu'),
+        tf.keras.layers.Dropout(0.3),
+        
+        tf.keras.layers.Dense(1, activation='sigmoid')
+    ])
+    
+    return model
+model = create_model()
+model.compile(
+    optimizer='adam',
+    loss='binary_crossentropy',
+    metrics=['accuracy']
+)
+model.summary()
+
+
+
+BATCH_SIZE = 128
+EPOCHS = 10
+
+callbacks = [
+    tf.keras.callbacks.EarlyStopping(
+        monitor='val_loss',
+        patience=3,
+        restore_best_weights=True
+    ),
+    tf.keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.2,
+        patience=2
+    )
+]
+
+history = model.fit(
+    X_train, y_train,
+    epochs=EPOCHS,
+    batch_size=BATCH_SIZE,
+    validation_data=(X_val, y_val),
+    callbacks=callbacks,
+    verbose=1
+)
+
+plt.figure(figsize=(12, 4))
+
+plt.subplot(1, 2, 1)
+plt.plot(history.history['accuracy'], label='Training Accuracy')
+plt.plot(history.history['val_accuracy'], label='Validation Accuracy')
+plt.title('Model Accuracy Over Time')
+plt.xlabel('Epoch')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.grid(True)
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Model Loss Over Time')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+
+test_loss, test_accuracy = model.evaluate(X_test, y_test, verbose=0)
+print(f"\nTest Accuracy: {test_accuracy:.4f}")
+
+print("\nSample Predictions vs Actual Labels:")
+predictions = model.predict(X_test[:5])
+for pred, actual in zip(predictions, y_test[:5]):
+    sentiment = "Positive" if pred > 0.5 else "Negative"
+    actual_sentiment = "Positive" if actual == 1 else "Negative"
+    confidence = pred if pred > 0.5 else 1 - pred
+    print(f"Predicted: {sentiment} (confidence: {confidence[0]:.2f}), Actual: {actual_sentiment}")
+
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+y_pred = (model.predict(X_test) > 0.5).astype(int)
+cm = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+plt.title('Confusion Matrix')
+plt.ylabel('True Label')
+plt.xlabel('Predicted Label')
+plt.show()
+
+def predict_review(review_text):
+    word_index = imdb.get_word_index()
+    review_text = review_text.lower()
+    words = review_text.split()
+    sequence = [word_index.get(word, 0) for word in words]
+    sequence = pad_sequences([sequence], maxlen=200)
+    prediction = model.predict(sequence)[0][0]
+    sentiment = "Positive" if prediction > 0.5 else "Negative"
+    confidence = prediction if prediction > 0.5 else 1 - prediction
+    return sentiment, confidence
+
+sample_review = "This movie was fantastic! The acting was great and the story kept me engaged throughout."
+sentiment, confidence = predict_review(sample_review)
+print(f"Review: {sample_review}")
+print(f"Prediction: {sentiment} (confidence: {confidence:.2f})")

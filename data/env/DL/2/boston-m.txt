@@ -1,0 +1,151 @@
+
+import tensorflow as tf
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+import warnings
+warnings.filterwarnings('ignore')
+np.random.seed(42)
+tf.random.set_seed(42)
+
+def load_boston_housing_data():
+    data_url = "http://lib.stat.cmu.edu/datasets/boston"
+    raw_df = pd.read_csv(data_url, sep="\s+", skiprows=22, header=None)
+    data = np.hstack([raw_df.values[::2, :], raw_df.values[1::2, :2]])
+    target = raw_df.values[1::2, 2]
+    scaler_X = StandardScaler()
+    scaler_y = StandardScaler()
+    X = scaler_X.fit_transform(data)
+    y = scaler_y.fit_transform(target.reshape(-1, 1))
+    return X, y, scaler_y
+
+X, y, scaler_y = load_boston_housing_data()
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+X_train, X_val, y_train, y_val = train_test_split(X_train, y_train, test_size=0.2, random_state=42)
+
+print(f"Training set shape: {X_train.shape}")
+print(f"Validation set shape: {X_val.shape}")
+print(f"Test set shape: {X_test.shape}")
+
+def create_model():
+    model = tf.keras.Sequential([
+        tf.keras.layers.Input(shape=(13,)),
+        tf.keras.layers.BatchNormalization(),
+        
+        tf.keras.layers.Dense(128, kernel_regularizer=tf.keras.regularizers.l2(0.01)),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Activation('relu'),
+        tf.keras.layers.Dropout(0.3),
+        
+        tf.keras.layers.Dense(64, kernel_regularizer=tf.keras.regularizers.l2(0.01)),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Activation('relu'),
+        tf.keras.layers.Dropout(0.2),
+        
+        tf.keras.layers.Dense(32, kernel_regularizer=tf.keras.regularizers.l2(0.01)),
+        tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Activation('relu'),
+        tf.keras.layers.Dropout(0.1),
+        
+        tf.keras.layers.Dense(1)
+    ])
+    return model
+
+model = create_model()
+model.compile(
+    optimizer=tf.keras.optimizers.Adam(learning_rate=0.001),
+    loss='mse',
+    metrics=['mae']
+)
+model.summary()
+
+
+
+batch_size = 32
+train_dataset = tf.data.Dataset.from_tensor_slices((X_train, y_train)).shuffle(len(X_train)).batch(batch_size)
+val_dataset = tf.data.Dataset.from_tensor_slices((X_val, y_val)).batch(batch_size)
+test_dataset = tf.data.Dataset.from_tensor_slices((X_test, y_test)).batch(batch_size)
+
+callbacks = [
+    tf.keras.callbacks.EarlyStopping(
+        monitor='val_loss',
+        patience=20,
+        restore_best_weights=True,
+        verbose=1
+    ),
+    tf.keras.callbacks.ReduceLROnPlateau(
+        monitor='val_loss',
+        factor=0.2,
+        patience=10,
+        min_lr=0.00001,
+        verbose=1
+    )
+]
+
+history = model.fit(
+    train_dataset,
+    epochs=200,
+    validation_data=val_dataset,
+    callbacks=callbacks,
+    verbose=1
+)
+
+plt.figure(figsize=(12, 4))
+
+plt.subplot(1, 2, 1)
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Validation Loss')
+plt.title('Model Loss Over Time')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.grid(True)
+
+plt.subplot(1, 2, 2)
+plt.plot(history.history['mae'], label='Training MAE')
+plt.plot(history.history['val_mae'], label='Validation MAE')
+plt.title('Model MAE Over Time')
+plt.xlabel('Epoch')
+plt.ylabel('Mean Absolute Error')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.show()
+
+
+
+test_results = model.evaluate(test_dataset, verbose=0)
+print(f"Test Mean Absolute Error (normalized): {test_results[1]:.4f}")
+
+test_predictions = model.predict(X_test)
+
+test_predictions_original = scaler_y.inverse_transform(test_predictions)
+test_actual_original = scaler_y.inverse_transform(y_test)
+
+mae_original = np.mean(np.abs(test_predictions_original - test_actual_original))
+mse = np.mean((test_predictions_original - test_actual_original) ** 2)
+rmse = np.sqrt(mse)
+r2 = 1 - (np.sum((test_actual_original - test_predictions_original) ** 2) / 
+          np.sum((test_actual_original - np.mean(test_actual_original)) ** 2))
+
+print(f"\nTest Mean Absolute Error: ${mae_original:.2f}k")
+print(f"Root Mean Square Error: ${rmse:.2f}k")
+print(f"R-squared Score: {r2:.4f}")
+
+print("\nSample Predictions vs Actual Values (in $1000s):")
+for pred, actual in zip(test_predictions_original[:5], test_actual_original[:5]):
+    print(f"Predicted: ${pred[0]:.2f}k, Actual: ${actual[0]:.2f}k")
+
+plt.figure(figsize=(10, 6))
+plt.scatter(test_actual_original, test_predictions_original, alpha=0.5)
+plt.plot([test_actual_original.min(), test_actual_original.max()],
+         [test_actual_original.min(), test_actual_original.max()],
+         'r--', lw=2)
+plt.xlabel('Actual Price ($1000s)')
+plt.ylabel('Predicted Price ($1000s)')
+plt.title('Predicted vs Actual House Prices')
+plt.grid(True)
+plt.show()
